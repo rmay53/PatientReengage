@@ -1,0 +1,240 @@
+// Patient re-engagement prototype. Minimum data needed to send a check-in.
+// Do NOT add fields for diagnosis, body region, insurance, date of birth,
+// address or clinical notes.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  approver
+  viewer
+}
+
+enum DischargeType {
+  completed
+  lapsed
+}
+
+enum Channel {
+  sms
+  email
+}
+
+enum Segment {
+  check_in
+  three_month
+  six_month
+  twelve_month
+  lapsed
+}
+
+enum MessageStatus {
+  drafted
+  approved
+  rejected
+  sent
+  failed
+}
+
+enum ReplyCategory {
+  opt_out
+  booking
+  clinical
+  other
+}
+
+model Location {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  phone       String
+  bookingLink String      @map("booking_link")
+  therapists  Therapist[]
+  users       User[]
+  patients    Patient[]
+
+  @@map("locations")
+}
+
+model Therapist {
+  id         String    @id @default(cuid())
+  firstName  String    @map("first_name")
+  lastName   String    @map("last_name")
+  locationId String    @map("location_id")
+  active     Boolean   @default(true)
+  location   Location  @relation(fields: [locationId], references: [id])
+  patients   Patient[]
+
+  @@map("therapists")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  role         Role
+  locationId   String?    @map("location_id")
+  active       Boolean    @default(true)
+  location     Location?  @relation(fields: [locationId], references: [id])
+  sessions     Session[]
+  auditEntries AuditLog[]
+
+  @@map("users")
+}
+
+/// Server-side sessions. The cookie holds a random token; only its SHA-256 hash is stored.
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Patient {
+  id            String        @id @default(cuid())
+  externalId    String        @unique @map("external_id")
+  firstName     String        @map("first_name")
+  lastName      String        @map("last_name")
+  email         String?
+  mobile        String?
+  locationId    String        @map("location_id")
+  therapistId   String?       @map("therapist_id")
+  dischargeDate DateTime      @map("discharge_date") @db.Date
+  dischargeType DischargeType @map("discharge_type")
+  smsOptIn      Boolean       @default(false) @map("sms_opt_in")
+  smsOptOut     Boolean       @default(false) @map("sms_opt_out")
+  emailOptOut   Boolean       @default(false) @map("email_opt_out")
+  doNotContact  Boolean       @default(false) @map("do_not_contact")
+  location      Location      @relation(fields: [locationId], references: [id])
+  therapist     Therapist?    @relation(fields: [therapistId], references: [id])
+  messages      Message[]
+  replies       Reply[]
+
+  @@index([locationId, dischargeType, dischargeDate])
+  @@map("patients")
+}
+
+model ImportBatch {
+  id           String   @id @default(cuid())
+  uploadedBy   String   @map("uploaded_by")
+  uploadedAt   DateTime @default(now()) @map("uploaded_at")
+  fileName     String   @map("file_name")
+  rowsAccepted Int      @map("rows_accepted")
+  rowsRejected Int      @map("rows_rejected")
+
+  @@map("import_batches")
+}
+
+model Template {
+  id       String    @id @default(cuid())
+  name     String
+  segment  Segment
+  channel  Channel
+  subject  String?
+  body     String
+  active   Boolean   @default(true)
+  messages Message[]
+
+  @@map("templates")
+}
+
+/// Admin-editable day ranges for each segment (inclusive).
+model SegmentRule {
+  segment       Segment       @id
+  label         String
+  dischargeType DischargeType @map("discharge_type")
+  minDays       Int           @map("min_days")
+  maxDays       Int           @map("max_days")
+  purpose       String
+
+  @@map("segment_rules")
+}
+
+model Message {
+  id           String        @id @default(cuid())
+  patientId    String        @map("patient_id")
+  templateId   String?       @map("template_id")
+  segment      Segment
+  channel      Channel
+  subject      String?
+  body         String
+  /// Body as first drafted, kept when staff edit before approving.
+  originalBody String?       @map("original_body")
+  edited       Boolean       @default(false)
+  status       MessageStatus @default(drafted)
+  draftedAt    DateTime      @default(now()) @map("drafted_at")
+  decidedBy    String?       @map("decided_by")
+  decidedAt    DateTime?     @map("decided_at")
+  sentAt       DateTime?     @map("sent_at")
+  patient      Patient       @relation(fields: [patientId], references: [id])
+  template     Template?     @relation(fields: [templateId], references: [id])
+  replies      Reply[]
+
+  @@index([status])
+  @@index([patientId])
+  @@map("messages")
+}
+
+model Reply {
+  id               String         @id @default(cuid())
+  patientId        String         @map("patient_id")
+  messageId        String?        @map("message_id")
+  channel          Channel
+  body             String
+  receivedAt       DateTime       @default(now()) @map("received_at")
+  category         ReplyCategory
+  urgent           Boolean        @default(false)
+  /// Suggested response from the classifier (booking only). Staff must approve it.
+  suggestedReply   String?        @map("suggested_reply")
+  /// What was actually sent back, if anything (opt-out confirmation or approved suggestion).
+  responseBody     String?        @map("response_body")
+  responseSentAt   DateTime?      @map("response_sent_at")
+  handledBy        String?        @map("handled_by")
+  handledAt        DateTime?      @map("handled_at")
+  patient          Patient        @relation(fields: [patientId], references: [id])
+  message          Message?       @relation(fields: [messageId], references: [id])
+
+  @@index([handledAt])
+  @@map("replies")
+}
+
+/// Written by the fake SmsSender / EmailSender instead of a real provider.
+model SimulatedDelivery {
+  id          String   @id @default(cuid())
+  messageId   String?  @map("message_id")
+  replyId     String?  @map("reply_id")
+  channel     Channel
+  toAddress   String   @map("to_address")
+  subject     String?
+  body        String
+  deliveredAt DateTime @default(now()) @map("delivered_at")
+
+  @@map("simulated_deliveries")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  /// Ids, counts and statuses only. Never names, contact details or message text.
+  details    String?
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@index([occurredAt])
+  @@index([entityType, entityId])
+  @@map("audit_log")
+}

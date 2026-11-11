@@ -1,0 +1,4 @@
+external_id,first_name,last_name,date_of_birth,email,mobile,location,therapist,discharge_date,discharge_type,sms_opt_in
+TEST-09004,Val,Exemplar,1900-01-01,val.exemplar.9004@example.com,(312) 555-0104,Riverside Physical Therapy,Vale Testington,2026-09-27,lapsed,no
+TEST-09005,Wynn,Testwell,1900-01-01,wynn.testwell.9005@example.com,(412) 555-0105,Hilltop Physical Therapy,Xan Notreal,2026-10-25,completed,yes
+TEST-09006,Indigo,Sandboxer,1900-01-01,indigo.sandboxer.9006@example.com,(724) 555-0106,Hilltop Physical Therapy,Yael Pretendo,2026-08-25,completed,yes
